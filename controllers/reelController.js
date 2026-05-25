@@ -1,52 +1,73 @@
 import { supabaseAdmin } from '../config/supabase.js';
 
-// ── POST /api/reels ───────────────────────────────────────────────────────────
+// ─── Upload Reel ──────────────────────────────────────────────────────────────
 export const uploadReel = async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'Video file is required' });
+      return res.status(400).json({ message: 'No video file provided' });
     }
 
-    const userId = req.user.id;
-    const caption = req.body.caption || '';
-    const fileBuffer = req.file.buffer;
-    const timestamp = Date.now();
-    const filePath = `${userId}/${timestamp}.mp4`;
+    const userId   = req.user.id;
+    const caption  = req.body.caption || '';
+    const buffer   = req.file.buffer;
+    const fileName = `${userId}/${Date.now()}.mp4`;
 
-    // Upload video to Supabase Storage
-    const { error: uploadError } = await supabaseAdmin.storage
+    // Supabase Storage mein upload karo
+    const { data: uploadData, error: uploadError } = await supabaseAdmin
+      .storage
       .from('reels')
-      .upload(filePath, fileBuffer, {
+      .upload(fileName, buffer, {
         contentType: 'video/mp4',
         upsert: false,
       });
 
     if (uploadError) {
-      return res.status(500).json({ message: 'Failed to upload video', error: uploadError.message });
+      console.error('Storage upload error:', uploadError);
+      return res.status(500).json({ message: 'Video upload failed', error: uploadError.message });
     }
 
-    // Get public URL
-    const { data: urlData } = supabaseAdmin.storage.from('reels').getPublicUrl(filePath);
-
-    // Insert reel record
-    const { data: reel, error: insertError } = await supabaseAdmin
+    // Public URL lo
+    const { data: urlData } = supabaseAdmin
+      .storage
       .from('reels')
-      .insert({ user_id: userId, video_url: urlData.publicUrl, caption })
-      .select()
+      .getPublicUrl(fileName);
+
+    const videoUrl = urlData.publicUrl;
+
+    // Database mein save karo
+    const { data: reel, error: dbError } = await supabaseAdmin
+      .from('reels')
+      .insert({
+        user_id:    userId,
+        video_url:  videoUrl,
+        caption:    caption,
+        likes_count: 0,
+        views_count: 0,
+      })
+      .select(`
+        *,
+        profiles:user_id (
+          id,
+          username,
+          avatar_url
+        )
+      `)
       .single();
 
-    if (insertError) {
-      return res.status(500).json({ message: 'Failed to create reel', error: insertError.message });
+    if (dbError) {
+      console.error('DB insert error:', dbError);
+      return res.status(500).json({ message: 'Could not save reel', error: dbError.message });
     }
 
-    return res.status(201).json(reel);
-  } catch (error) {
-    console.error('uploadReel error:', error.message);
-    return res.status(500).json({ message: 'Server error uploading reel' });
+    res.status(201).json({ message: 'Reel uploaded successfully', reel });
+
+  } catch (err) {
+    console.error('uploadReel error:', err);
+    res.status(500).json({ message: err.message });
   }
 };
 
-// ── GET /api/reels/feed ───────────────────────────────────────────────────────
+// ─── Get Reels Feed ───────────────────────────────────────────────────────────
 export const getReelsFeed = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -58,86 +79,99 @@ export const getReelsFeed = async (req, res) => {
         profiles:user_id (
           id,
           username,
-          avatar_url
+          avatar_url,
+          full_name
+        ),
+        reel_likes!left (
+          user_id
         )
       `)
       .order('created_at', { ascending: false })
       .limit(30);
 
     if (error) {
-      return res.status(500).json({ message: 'Failed to fetch reels', error: error.message });
+      return res.status(500).json({ message: error.message });
     }
 
-    // Check which reels the user has liked
-    const reelIds = (reels || []).map((r) => r.id);
-    let likedReelIds = new Set();
-
-    if (reelIds.length > 0) {
-      const { data: likes } = await supabaseAdmin
-        .from('reel_likes')
-        .select('reel_id')
-        .eq('user_id', userId)
-        .in('reel_id', reelIds);
-
-      likedReelIds = new Set((likes || []).map((l) => l.reel_id));
-    }
-
-    const enrichedReels = (reels || []).map((reel) => ({
+    // Har reel pe is_liked field add karo
+    const reelsWithLikes = reels.map(reel => ({
       ...reel,
-      is_liked: likedReelIds.has(reel.id),
+      user: reel.profiles,
+      is_liked: reel.reel_likes?.some(like => like.user_id === userId) || false,
     }));
 
-    return res.status(200).json(enrichedReels);
-  } catch (error) {
-    console.error('getReelsFeed error:', error.message);
-    return res.status(500).json({ message: 'Server error fetching reels' });
+    res.json(reelsWithLikes);
+
+  } catch (err) {
+    console.error('getReelsFeed error:', err);
+    res.status(500).json({ message: err.message });
   }
 };
 
-// ── PUT /api/reels/:id/like ───────────────────────────────────────────────────
+// ─── Toggle Reel Like ─────────────────────────────────────────────────────────
 export const toggleReelLike = async (req, res) => {
   try {
-    const reelId = req.params.id;
     const userId = req.user.id;
+    const reelId = req.params.id;
 
+    // Like exist karta hai check karo
     const { data: existing } = await supabaseAdmin
       .from('reel_likes')
       .select('id')
       .eq('user_id', userId)
       .eq('reel_id', reelId)
-      .maybeSingle();
-
-    const { data: reelData } = await supabaseAdmin
-      .from('reels')
-      .select('likes_count')
-      .eq('id', reelId)
       .single();
 
-    const currentLikes = reelData?.likes_count || 0;
-
     if (existing) {
-      await supabaseAdmin.from('reel_likes').delete().eq('user_id', userId).eq('reel_id', reelId);
-      const newCount = Math.max(0, currentLikes - 1);
-      await supabaseAdmin.from('reels').update({ likes_count: newCount }).eq('id', reelId);
-      return res.status(200).json({ liked: false, likes: newCount });
+      // Unlike karo
+      await supabaseAdmin
+        .from('reel_likes')
+        .delete()
+        .eq('user_id', userId)
+        .eq('reel_id', reelId);
+
+      await supabaseAdmin
+        .from('reels')
+        .update({ likes_count: supabaseAdmin.rpc('decrement', { x: 1 }) })
+        .eq('id', reelId);
+
+      const { data: reel } = await supabaseAdmin
+        .from('reels')
+        .select('likes_count')
+        .eq('id', reelId)
+        .single();
+
+      return res.json({ liked: false, likes: reel?.likes_count || 0 });
+
     } else {
-      await supabaseAdmin.from('reel_likes').insert({ user_id: userId, reel_id: reelId });
-      const newCount = currentLikes + 1;
-      await supabaseAdmin.from('reels').update({ likes_count: newCount }).eq('id', reelId);
-      return res.status(200).json({ liked: true, likes: newCount });
+      // Like karo
+      await supabaseAdmin
+        .from('reel_likes')
+        .insert({ user_id: userId, reel_id: reelId });
+
+      await supabaseAdmin.rpc('increment_reel_likes', { reel_id: reelId });
+
+      const { data: reel } = await supabaseAdmin
+        .from('reels')
+        .select('likes_count')
+        .eq('id', reelId)
+        .single();
+
+      return res.json({ liked: true, likes: reel?.likes_count || 0 });
     }
-  } catch (error) {
-    console.error('toggleReelLike error:', error.message);
-    return res.status(500).json({ message: 'Server error toggling reel like' });
+
+  } catch (err) {
+    console.error('toggleReelLike error:', err);
+    res.status(500).json({ message: err.message });
   }
 };
 
-// ── PUT /api/reels/:id/view ───────────────────────────────────────────────────
+// ─── Increment View ───────────────────────────────────────────────────────────
 export const incrementView = async (req, res) => {
   try {
     const reelId = req.params.id;
 
-    const { data: reelData } = await supabaseAdmin
+    const { data: reel } = await supabaseAdmin
       .from('reels')
       .select('views_count')
       .eq('id', reelId)
@@ -145,12 +179,13 @@ export const incrementView = async (req, res) => {
 
     await supabaseAdmin
       .from('reels')
-      .update({ views_count: (reelData?.views_count || 0) + 1 })
+      .update({ views_count: (reel?.views_count || 0) + 1 })
       .eq('id', reelId);
 
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('incrementView error:', error.message);
-    return res.status(500).json({ message: 'Server error incrementing view' });
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error('incrementView error:', err);
+    res.status(500).json({ message: err.message });
   }
 };

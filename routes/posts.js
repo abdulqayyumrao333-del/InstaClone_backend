@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express from 'express';  // express import karo, sirf Router nahi
 import { protect } from '../middleware/auth.js';
 import { uploadImage } from '../middleware/upload.js';
 import {
@@ -8,18 +8,18 @@ import {
   toggleLike,
   addComment,
   getComments,
+  deletePost
 } from '../controllers/postController.js';
 
-const router = Router();
+const router = express.Router();  // sirf ek baar declare karo
 
-// All routes are protected
-router.use(protect);
-
-router.post('/', uploadImage.single('image'), createPost); // POST /api/posts
-router.get('/feed', getFeed);                              // GET  /api/posts/feed
-router.get('/user/:userId', getUserPosts);                 // GET  /api/posts/user/:userId
-router.put('/:id/like', toggleLike);                      // PUT  /api/posts/:id/like
-router.post('/:id/comment', addComment);                  // POST /api/posts/:id/comment
-router.get('/:id/comments', getComments);                 // GET  /api/posts/:id/comments
+// Saare routes protected hain - har route mein protect middleware lagao
+router.post('/',                protect, uploadImage.single('image'), createPost);
+router.get('/feed',             protect, getFeed);
+router.get('/user/:userId',     protect, getUserPosts);
+router.put('/:id/like',         protect, toggleLike);
+router.post('/:id/comment',     protect, addComment);
+router.get('/:id/comments',     protect, getComments);
+router.delete('/:id',           protect, deletePost);
 
 export default router;
