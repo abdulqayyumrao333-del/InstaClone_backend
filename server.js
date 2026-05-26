@@ -7,6 +7,7 @@ import postRoutes from './routes/posts.js';
 import reelRoutes from './routes/reels.js';
 import storyRoutes from './routes/stories.js';
 import aiRoutes from './routes/ai.js';
+import notificationsRouter from './routes/notifications.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -27,6 +28,7 @@ app.use('/api/posts', postRoutes);
 app.use('/api/reels', reelRoutes);
 app.use('/api/stories', storyRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/notifications', notificationsRouter);
 
 // ── 404 Handler ───────────────────────────────────────────────────────────────
 app.use((_req, res) => {
