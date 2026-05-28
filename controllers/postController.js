@@ -264,3 +264,33 @@ export const getComments = async (req, res) => {
     return res.status(500).json({ message: 'Server error fetching comments' });
   }
 };
+// ─── Delete Post ──────────────────────────────────────────────────────────────
+export const deletePost = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const postId = req.params.id;
+
+    const { data: post } = await supabaseAdmin
+      .from('posts')
+      .select('user_id, image_url')
+      .eq('id', postId)
+      .single();
+
+    if (!post) return res.status(404).json({ message: 'Post not found' });
+    if (post.user_id !== userId) return res.status(403).json({ message: 'Not authorized' });
+
+    // Storage se delete
+    const pathParts = post.image_url.split('/');
+    const fileName = `${userId}/${pathParts[pathParts.length - 1]}`;
+    await supabaseAdmin.storage.from('posts').remove([fileName]);
+
+    // Database se delete
+    await supabaseAdmin.from('posts').delete().eq('id', postId);
+
+    res.json({ message: 'Post deleted successfully' });
+
+  } catch (err) {
+    console.error('deletePost error:', err);
+    res.status(500).json({ message: err.message });
+  }
+};
